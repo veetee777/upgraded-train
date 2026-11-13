@@ -38,6 +38,9 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import com.glassforge.app.core.LocalFileStore
+import com.glassforge.app.workspace.WorkspaceScreen
+import com.glassforge.app.workspace.WorkspaceStore
 
 private val Back = Color(0xFF080B12)
 private val Panel = Color(0xFF141B28)
@@ -55,6 +58,8 @@ class MainActivity : ComponentActivity() {
 fun GlassforgeApp() {
     val context = LocalContext.current
     var tab by remember { mutableStateOf(0) }
+    val workspaceScope = rememberCoroutineScope()
+    val workspaceStore = remember { WorkspaceStore(context, LocalFileStore(context), workspaceScope) }
     var selectedFont by remember { mutableStateOf(context.getSharedPreferences("glassforge_fonts", Context.MODE_PRIVATE).getString("selected_font", "").orEmpty()) }
     val fontFamily = remember(selectedFont) {
         val safeFontName = selectedFont.takeIf { it.matches(Regex("^font_[a-f0-9-]{36}\\.(ttf|otf)$")) }
@@ -90,7 +95,7 @@ fun GlassforgeApp() {
             }
         }) { pad ->
             when (tab) {
-                0 -> LauncherHomeScreen(Modifier.padding(pad))
+                0 -> WorkspaceScreen(store = workspaceStore)
                 1 -> StudioScreen(Modifier.padding(pad))
                 2 -> NotchStudio(Modifier.padding(pad))
                 3 -> WidgetsScreen(Modifier.padding(pad))
