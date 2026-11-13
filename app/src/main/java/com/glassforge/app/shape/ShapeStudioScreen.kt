@@ -46,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +83,10 @@ fun ShapeStudioScreen(modifier: Modifier = Modifier) {
         currentConfig = config
         prefs.save(config)
     }
+    // P2-12: sliders update state on every tick but persist only when
+    // the drag finishes — onValueChangeFinished can fire before the
+    // last tick's recomposition, so read through this ref.
+    val latestConfig by rememberUpdatedState(currentConfig)
 
     // ── Block 1: state ──────────────────────────────────────────────
     val lifecycleOwner = LocalContext.current as? LifecycleOwner
@@ -92,7 +97,10 @@ fun ShapeStudioScreen(modifier: Modifier = Modifier) {
     // Auto-detect season once per composition
     val seasonalEvent = remember { SeasonalEvent.detect() }
     val seasonalPresets = remember(seasonalEvent) { SeasonalPresets.presetsFor(seasonalEvent) }
-    var bannerDismissed by remember(seasonalEvent) { mutableStateOf(false) }
+    // P2-11: dismissal is persisted per event, not just remembered.
+    var bannerDismissed by remember(seasonalEvent) {
+        mutableStateOf(prefs.isBannerDismissed(seasonalEvent))
+    }
 
     // Activation overlay visibility
     var showActivation by remember { mutableStateOf(false) }
@@ -106,6 +114,22 @@ fun ShapeStudioScreen(modifier: Modifier = Modifier) {
             if (tiltSensor.isAvailable && lifecycleOwner != null) {
                 lifecycleOwner.lifecycle.removeObserver(tiltSensor)
             }
+            // P2-10: tab switches do not pause the activity, so
+            // onPause never fires when leaving Studio — unregister
+            // here or the sensor keeps running (and draining battery)
+            // on every other tab. Safe even if never registered.
+            tiltSensor.unregister()
+        }
+    }
+
+    // P2-15: the glitch hint (tapProgress >= 4) must decay. This
+    // effect restarts on every tap, so the timer always runs from
+    // the last tap; if the 4s window passes with no further tap,
+    // the progress resets and the hint disappears.
+    LaunchedEffect(easterEgg.tapProgress) {
+        if (easterEgg.tapProgress > 0) {
+            kotlinx.coroutines.delay(EasterEggController.TAP_WINDOW_MS)
+            easterEgg.clearTapProgress()
         }
     }
 
@@ -146,7 +170,10 @@ fun ShapeStudioScreen(modifier: Modifier = Modifier) {
                     event = seasonalEvent,
                     presets = seasonalPresets,
                     onPresetSelected = { config -> onConfigChanged(config) },
-                    onDismiss = { bannerDismissed = true },
+                    onDismiss = {
+                        bannerDismissed = true
+                        prefs.setBannerDismissed(seasonalEvent, true)
+                    },
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
             }
@@ -165,6 +192,17 @@ fun ShapeStudioScreen(modifier: Modifier = Modifier) {
                         .graphicsLayer {
                             compositingStrategy = CompositingStrategy.Offscreen
                         }
+                        // P2-17: aurora BEFORE clip. The border strokes
+                        // are centred on the outline, so half the
+                        // stroke sits outside it — clip() after the
+                        // border would cut that half off.
+                        .auroraGlassBorder(
+                            shape = currentShape,
+                            strokeWidth = currentConfig.borderThickness.dp,
+                            animated = currentConfig.auroraGlassEnabled || isVoid,
+                            tiltX = if (currentConfig.liquidGlassEnabled) tiltSensor.tiltX else 0f,
+                            tiltY = if (currentConfig.liquidGlassEnabled) tiltSensor.tiltY else 0f
+                        )
                         .clip(currentShape)
                         .background(
                             Brush.linearGradient(
@@ -174,13 +212,6 @@ fun ShapeStudioScreen(modifier: Modifier = Modifier) {
                                     Color(0xFFFF3B5C)
                                 )
                             )
-                        )
-                        .auroraGlassBorder(
-                            shape = currentShape,
-                            strokeWidth = currentConfig.borderThickness.dp,
-                            animated = currentConfig.auroraGlassEnabled || isVoid,
-                            tiltX = if (currentConfig.liquidGlassEnabled) tiltSensor.tiltX else 0f,
-                            tiltY = if (currentConfig.liquidGlassEnabled) tiltSensor.tiltY else 0f
                         )
                         .clickable { easterEgg.recordPreviewTap() }
                 ) {
@@ -241,41 +272,49 @@ fun ShapeStudioScreen(modifier: Modifier = Modifier) {
             }
 
             // ── Sliders ─────────────────────────────────────────────
+            // P2-12: sliders update state on every tick but persist
+            // only when the drag finishes — no prefs write per tick.
             SliderRow(
                 label = "Amplitude",
                 value = currentConfig.amplitude,
                 range = 0f..24f,
-                onValueChange = { onConfigChanged(currentConfig.copy(amplitude = it)) }
+                onValueChange = { currentConfig = currentConfig.copy(amplitude = it) },
+                onValueChangeFinished = { prefs.save(latestConfig) }
             )
             SliderRow(
                 label = "Frequency",
                 value = currentConfig.frequency,
                 range = 1f..20f,
-                onValueChange = { onConfigChanged(currentConfig.copy(frequency = it)) }
+                onValueChange = { currentConfig = currentConfig.copy(frequency = it) },
+                onValueChangeFinished = { prefs.save(latestConfig) }
             )
             SliderRow(
                 label = "Corner radius",
                 value = currentConfig.cornerRadius,
                 range = 0f..50f,
-                onValueChange = { onConfigChanged(currentConfig.copy(cornerRadius = it)) }
+                onValueChange = { currentConfig = currentConfig.copy(cornerRadius = it) },
+                onValueChangeFinished = { prefs.save(latestConfig) }
             )
             SliderRow(
                 label = "Border thickness",
                 value = currentConfig.borderThickness,
                 range = 1f..5f,
-                onValueChange = { onConfigChanged(currentConfig.copy(borderThickness = it)) }
+                onValueChange = { currentConfig = currentConfig.copy(borderThickness = it) },
+                onValueChangeFinished = { prefs.save(latestConfig) }
             )
             SliderRow(
                 label = "Horizontal scale",
                 value = currentConfig.horizontalScale,
                 range = 0.8f..1.2f,
-                onValueChange = { onConfigChanged(currentConfig.copy(horizontalScale = it)) }
+                onValueChange = { currentConfig = currentConfig.copy(horizontalScale = it) },
+                onValueChangeFinished = { prefs.save(latestConfig) }
             )
             SliderRow(
                 label = "Vertical scale",
                 value = currentConfig.verticalScale,
                 range = 0.8f..1.2f,
-                onValueChange = { onConfigChanged(currentConfig.copy(verticalScale = it)) }
+                onValueChange = { currentConfig = currentConfig.copy(verticalScale = it) },
+                onValueChangeFinished = { prefs.save(latestConfig) }
             )
 
             // ── Block 4: Glass Physics toggles ──────────────────────
@@ -356,7 +395,8 @@ private fun SliderRow(
     label: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit = {}
 ) {
     Column {
         Row(
@@ -373,6 +413,7 @@ private fun SliderRow(
         Slider(
             value = value,
             onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
             valueRange = range
         )
     }

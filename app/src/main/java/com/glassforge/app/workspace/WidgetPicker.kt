@@ -31,7 +31,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,7 +39,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
 
 @Composable
 fun WidgetPickerSection(
@@ -49,7 +47,6 @@ fun WidgetPickerSection(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val items by store.items.collectAsState()
     val placedWidgets = items.filterIsInstance<WorkspaceItem.Widget>()
     var message by remember { mutableStateOf("") }
@@ -61,27 +58,29 @@ fun WidgetPickerSection(
             .sortedBy { it.loadLabel(context.packageManager).toString().lowercase() }
     }
 
+    // The anchor is cheap and pure, so it is computed up front on
+    // the main thread; the durable add runs in the store's scope
+    // (P2-22: a tab switch mid-add cannot cancel the write).
     fun placeWidget(provider: AppWidgetProviderInfo, appWidgetId: Int) {
-        scope.launch {
-            val anchor = WorkspaceRules.findFreeAnchor(store.items.value, 2, 2)
-            if (anchor == null) {
-                message = "No free 2×2 space on the home grid"
-                widgetHost.deleteAppWidgetId(appWidgetId)
-                return@launch
-            }
-            val label = provider.loadLabel(context.packageManager)?.toString()
-                ?: provider.provider.className
-            val widget = WorkspaceItem.Widget(
-                id = "widget:$appWidgetId",
-                appWidgetId = appWidgetId,
-                providerPackage = provider.provider.packageName,
-                providerClass = provider.provider.className,
-                label = label,
-                cell = anchor,
-                spanX = 2,
-                spanY = 2,
-            )
-            val ok = store.addWidget(widget)
+        val anchor = WorkspaceRules.findFreeAnchor(store.items.value, 2, 2)
+        if (anchor == null) {
+            message = "No free 2×2 space on the home grid"
+            widgetHost.deleteAppWidgetId(appWidgetId)
+            return
+        }
+        val label = provider.loadLabel(context.packageManager)?.toString()
+            ?: provider.provider.className
+        val widget = WorkspaceItem.Widget(
+            id = "widget:$appWidgetId",
+            appWidgetId = appWidgetId,
+            providerPackage = provider.provider.packageName,
+            providerClass = provider.provider.className,
+            label = label,
+            cell = anchor,
+            spanX = 2,
+            spanY = 2,
+        )
+        store.runPersist({ store.addWidget(widget) }) { ok ->
             if (!ok) {
                 message = "Could not place ${widget.label}"
                 widgetHost.deleteAppWidgetId(appWidgetId)
@@ -106,6 +105,21 @@ fun WidgetPickerSection(
         }
     }
 
+    // P1-9: the configure intent must name its component — without
+    // one the launch can throw ActivityNotFoundException — and a
+    // failed launch must delete the allocated id instead of leaking it.
+    fun launchConfigure(provider: AppWidgetProviderInfo, appWidgetId: Int) {
+        val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
+            setComponent(provider.configure)
+            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+        }
+        val launched = runCatching { configLauncher.launch(intent) }.isSuccess
+        if (!launched) {
+            widgetHost.deleteAppWidgetId(appWidgetId)
+            message = "Could not open ${provider.loadLabel(context.packageManager) ?: "widget"} settings"
+        }
+    }
+
     val bindLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -121,11 +135,7 @@ fun WidgetPickerSection(
         if (provider.configure != null) {
             pendingProvider = provider
             pendingId = id
-            configLauncher.launch(
-                Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                }
-            )
+            launchConfigure(provider, id)
         } else {
             placeWidget(provider, id)
         }
@@ -137,11 +147,7 @@ fun WidgetPickerSection(
             if (provider.configure != null) {
                 pendingProvider = provider
                 pendingId = id
-                configLauncher.launch(
-                    Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
-                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                    }
-                )
+                launchConfigure(provider, id)
             } else {
                 placeWidget(provider, id)
             }
@@ -224,8 +230,8 @@ fun WidgetPickerSection(
                         )
                     }
                     TextButton(onClick = {
-                        scope.launch {
-                            if (store.removeItem(widget.id)) {
+                        store.runPersist({ store.removeItem(widget.id) }) { removed ->
+                            if (removed) {
                                 widgetHost.deleteAppWidgetId(widget.appWidgetId)
                                 message = "${widget.label} removed"
                             }

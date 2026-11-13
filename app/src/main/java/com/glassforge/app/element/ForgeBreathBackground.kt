@@ -43,16 +43,32 @@ fun ForgeBreathBackground(modifier: Modifier = Modifier, content: @Composable ()
     var isCharging by remember { mutableStateOf(false) }
 
     DisposableEffect(context) {
+        // Shared parsing for the sticky intent (first paint) and for
+        // every later broadcast — one place that turns an intent into
+        // battery state.
+        fun applyBatteryIntent(intent: Intent?) {
+            val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            batteryLevel = if (level != -1 && scale != -1) level.toFloat() / scale.toFloat() else 1f
+            val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+        }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-                val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-                batteryLevel = if (level != -1 && scale != -1) level.toFloat() / scale.toFloat() else 1f
-                val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-                isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+                applyBatteryIntent(intent)
             }
         }
-        context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        // P2-18: ACTION_BATTERY_CHANGED is sticky — registerReceiver
+        // returns the last broadcast, so parse it immediately instead
+        // of painting the wrong color until the next battery event.
+        // The 3-arg overload with RECEIVER_NOT_EXPORTED is required on
+        // Android 14+ for targetSdk 35; the 2-arg form throws there.
+        val stickyIntent = context.registerReceiver(
+            receiver,
+            IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+            Context.RECEIVER_NOT_EXPORTED
+        )
+        applyBatteryIntent(stickyIntent)
         onDispose { context.unregisterReceiver(receiver) }
     }
 

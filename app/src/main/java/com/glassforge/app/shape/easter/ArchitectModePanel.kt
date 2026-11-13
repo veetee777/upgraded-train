@@ -9,6 +9,7 @@ package com.glassforge.app.shape.easter
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,9 +37,16 @@ fun ArchitectActivationOverlay(visible: Boolean, onComplete: () -> Unit) {
         enter   = fadeIn(tween(200)),
         exit    = fadeOut(tween(700))
     ) {
+        // P2-16: the overlay must block touch (a bare Box lets taps
+        // fall through to the screen below) and a tap skips the boot
+        // sequence instead of forcing the user to watch all of it.
         Box(
-            modifier            = Modifier.fillMaxSize().background(Color.Black),
-            contentAlignment    = Alignment.Center
+            modifier = Modifier.fillMaxSize().background(Color.Black)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onComplete() },
+            contentAlignment = Alignment.Center
         ) {
             TerminalBootSequence(onComplete)
         }

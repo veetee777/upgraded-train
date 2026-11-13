@@ -116,7 +116,10 @@ fun GlassforgeApp() {
             }
         }) { pad ->
             when (tab) {
-                0 -> WorkspaceScreen(store = workspaceStore, widgetHost = widgetHost)
+                // P1-3: Home gets the Scaffold padding like every other
+                // tab — before this the bottom grid row and footer hid
+                // behind the navigation bar.
+                0 -> WorkspaceScreen(store = workspaceStore, widgetHost = widgetHost, modifier = Modifier.padding(pad))
                 1 -> ShapeStudioScreen(Modifier.padding(pad))
                 2 -> NotchStudio(Modifier.padding(pad))
                 3 -> WidgetsScreen(Modifier.padding(pad), store = workspaceStore, widgetHost = widgetHost)

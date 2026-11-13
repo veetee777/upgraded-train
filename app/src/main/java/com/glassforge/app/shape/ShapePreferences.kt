@@ -9,6 +9,7 @@
 package com.glassforge.app.shape
 
 import android.content.Context
+import com.glassforge.app.shape.seasonal.SeasonalEvent
 
 /**
  * Persists the current [ShapeConfig] in SharedPreferences.
@@ -55,6 +56,18 @@ class ShapePreferences(context: Context) {
             .apply()
     }
 
+    // P2-11: seasonal banner dismissal, persisted per event so a
+    // dismissed banner stays dismissed across restarts (until the
+    // season changes and a new event arrives).
+    fun isBannerDismissed(event: SeasonalEvent): Boolean =
+        prefs.getBoolean(KEY_BANNER_DISMISSED_PREFIX + event.name, false)
+
+    fun setBannerDismissed(event: SeasonalEvent, dismissed: Boolean) {
+        prefs.edit()
+            .putBoolean(KEY_BANNER_DISMISSED_PREFIX + event.name, dismissed)
+            .apply()
+    }
+
     private companion object {
         private const val PREFS_NAME = "glassforge_shape"
         private const val KEY_TYPE = "shape_type"
@@ -66,5 +79,6 @@ class ShapePreferences(context: Context) {
         private const val KEY_BORDER_THICKNESS = "border_thickness"
         private const val KEY_LIQUID_GLASS = "liquid_glass_enabled"
         private const val KEY_AURORA_GLASS = "aurora_glass_enabled"
+        private const val KEY_BANNER_DISMISSED_PREFIX = "banner_dismissed_"
     }
 }

@@ -79,6 +79,16 @@ class EasterEggController(context: Context) {
         prefs.edit().putBoolean(KEY_UNLOCKED, true).apply()
     }
 
+    /**
+     * P2-15: drop the in-progress tap count (e.g. when the 4s window
+     * expires with no further tap) so the glitch hint decays instead
+     * of lingering forever at >= 4 taps.
+     */
+    fun clearTapProgress() {
+        tapCount    = 0
+        tapProgress = 0
+    }
+
     /** Debug/QA only — not wired into production UI. */
     internal fun debugReset() {
         architectUnlocked = false
