@@ -1,0 +1,32 @@
+# Gradle and build outputs
+.gradle/
+build/
+app/build/
+**/build/
+.kotlin/
+
+# Android Studio / IntelliJ / IDE
+.idea/
+*.iml
+.vscode/
+
+# Local configuration and machine-specific paths (PROTECTED)
+local.properties
+*.log
+
+# Android binaries and keystores
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Backups and temporary files
+*.bak
+*.tmp
+*.part
+*.tar.gz
+.DS_Store
+
+# Local backup configuration
+gradle.properties.backup
+gradle.properties.before-phone-build

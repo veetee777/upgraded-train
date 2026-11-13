@@ -1,0 +1,17 @@
+Wed Nov 11 06:42:17 CST 2026
+Copied source from: /sdcard/Download/GLASSFORGE_working_source_updated/GLASSFORGE_v0.7
+Verified copy with diff before modification.
+Preserved original gradle.properties in working directory.
+Set Gradle heap to 1536m, workers to 2, parallel to false.
+No build attempted; no APK verified.
+Wed Nov 11 06:43:40 CST 2026
+Gradle 8.9 archive verified against published SHA-256.
+Gradle --version completed successfully.
+Wed Nov 11 06:49:41 CST 2026
+Gradle project configuration test exit code: 0
+Full output: ~/GLASSFORGE/configuration-test.log
+No APK build attempted in this test.
+Wed Nov 11 06:51:45 CST 2026
+Debug APK build exit code: 1
+Full output: ~/GLASSFORGE/debug-build.log
+No APK installation or app launch attempted.
