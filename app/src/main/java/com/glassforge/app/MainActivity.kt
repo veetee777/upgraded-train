@@ -32,6 +32,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -40,6 +43,8 @@ import java.io.FileOutputStream
 import java.util.UUID
 import com.glassforge.app.core.LocalFileStore
 import com.glassforge.app.shape.ShapeStudioScreen
+import com.glassforge.app.workspace.WidgetHost
+import com.glassforge.app.workspace.WidgetPickerSection
 import com.glassforge.app.workspace.WorkspaceScreen
 import com.glassforge.app.workspace.WorkspaceStore
 
@@ -61,6 +66,21 @@ fun GlassforgeApp() {
     var tab by remember { mutableStateOf(0) }
     val workspaceScope = rememberCoroutineScope()
     val workspaceStore = remember { WorkspaceStore(context, LocalFileStore(context), workspaceScope) }
+    // Phase 2: one AppWidgetHost for the launcher. Listening is tied to
+    // the activity lifecycle — without it, hosted widgets go stale.
+    val widgetHost = remember { WidgetHost(context) }
+    val lifecycleOwner = LocalContext.current as? LifecycleOwner
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> widgetHost.startListening()
+                Lifecycle.Event.ON_PAUSE -> widgetHost.stopListening()
+                else -> {}
+            }
+        }
+        lifecycleOwner?.lifecycle?.addObserver(observer)
+        onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
+    }
     var selectedFont by remember { mutableStateOf(context.getSharedPreferences("glassforge_fonts", Context.MODE_PRIVATE).getString("selected_font", "").orEmpty()) }
     val fontFamily = remember(selectedFont) {
         val safeFontName = selectedFont.takeIf { it.matches(Regex("^font_[a-f0-9-]{36}\\.(ttf|otf)$")) }
@@ -96,10 +116,10 @@ fun GlassforgeApp() {
             }
         }) { pad ->
             when (tab) {
-                0 -> WorkspaceScreen(store = workspaceStore)
+                0 -> WorkspaceScreen(store = workspaceStore, widgetHost = widgetHost)
                 1 -> ShapeStudioScreen(Modifier.padding(pad))
                 2 -> NotchStudio(Modifier.padding(pad))
-                3 -> WidgetsScreen(Modifier.padding(pad))
+                3 -> WidgetsScreen(Modifier.padding(pad), store = workspaceStore, widgetHost = widgetHost)
                 else -> FontForgeScreen(Modifier.padding(pad), selectedFont) { selectedFont = it }
             }
         }
@@ -312,7 +332,7 @@ private fun FeatureToggle(label: String, checked: Boolean, onChange: (Boolean) -
 private data class LaunchableApp(val label: String, val packageName: String, val icon: androidx.compose.ui.graphics.ImageBitmap?)
 
 @Composable
-private fun WidgetsScreen(modifier: Modifier = Modifier) {
+private fun WidgetsScreen(modifier: Modifier = Modifier, store: WorkspaceStore, widgetHost: WidgetHost) {
     val context = LocalContext.current
     val pm = context.packageManager
     // Package discovery and icon rasterization happen off the UI thread. The resulting
@@ -369,6 +389,7 @@ private fun WidgetsScreen(modifier: Modifier = Modifier) {
 
     LazyColumn(modifier.fillMaxSize()) {
         item { Header("WIDGET WORKSHOP", "Build a widget around any installed app.") }
+        item { WidgetPickerSection(store = store, widgetHost = widgetHost, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) }
         item { GlassPanel {
             Text("1 · CHOOSE AN APP", color = Cyan, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF0B111B)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {

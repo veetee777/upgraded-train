@@ -175,6 +175,52 @@ class WorkspaceStore(
             true
         }
 
+    /**
+     * Phase 2: add a hosted widget. The whole covered block must be
+     * free (span-aware) and fit inside the grid, or nothing is added.
+     * The caller owns the AppWidgetHost id: on failure it must delete
+     * the allocated id, and on removal it must delete it too.
+     */
+    suspend fun addWidget(item: WorkspaceItem.Widget): Boolean =
+        withContext(Dispatchers.IO) {
+            val current = _items.value
+            if (current.any { it.id == item.id }) return@withContext false
+            val covered = WorkspaceRules.coveredCells(item)
+            if (covered.any { !WorkspaceRules.isInBounds(it) }) {
+                return@withContext false
+            }
+            if (covered.any { WorkspaceRules.occupantAt(current, it) != null }) {
+                return@withContext false
+            }
+            val ok = appendRecord(
+                JSONObject().apply {
+                    put("op", "add")
+                    put("seq", System.currentTimeMillis())
+                    put("item", itemToJson(item))
+                },
+            )
+            if (!ok) return@withContext false
+            _items.value = current + item
+            true
+        }
+
+    /** Phase 2: remove any item by id (widget, shortcut, folder). */
+    suspend fun removeItem(itemId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val current = _items.value
+            if (current.none { it.id == itemId }) return@withContext false
+            val ok = appendRecord(
+                JSONObject().apply {
+                    put("op", "remove")
+                    put("seq", System.currentTimeMillis())
+                    put("id", itemId)
+                },
+            )
+            if (!ok) return@withContext false
+            _items.value = current.filterNot { it.id == itemId }
+            true
+        }
+
     /** First-run placement: fill page 0 in reading order, 4 cols x 5 rows. */
     suspend fun placeDiscoveredIfEmpty(
         packageManager: PackageManager,
@@ -260,6 +306,19 @@ class WorkspaceStore(
                 put("x", item.cell.x)
                 put("y", item.cell.y)
             }
+            is WorkspaceItem.Widget -> JSONObject().apply {
+                put("type", "widget")
+                put("id", item.id)
+                put("appWidgetId", item.appWidgetId)
+                put("providerPackage", item.providerPackage)
+                put("providerClass", item.providerClass)
+                put("label", item.label)
+                put("page", item.cell.page)
+                put("x", item.cell.x)
+                put("y", item.cell.y)
+                put("spanX", item.spanX)
+                put("spanY", item.spanY)
+            }
         }
 
     private fun parseItems(array: JSONArray): List<WorkspaceItem> {
@@ -298,6 +357,19 @@ class WorkspaceStore(
                     memberIds = members,
                     cell = cell,
                 ).takeIf { it.id.isNotEmpty() }
+            }
+            "widget" -> WorkspaceItem.Widget(
+                id = json.optString("id"),
+                appWidgetId = json.optInt("appWidgetId", -1),
+                providerPackage = json.optString("providerPackage"),
+                providerClass = json.optString("providerClass"),
+                label = json.optString("label"),
+                cell = cell,
+                spanX = json.optInt("spanX", 2).coerceIn(1, WorkspaceRules.COLUMNS),
+                spanY = json.optInt("spanY", 2).coerceIn(1, WorkspaceRules.ROWS),
+            ).takeIf {
+                it.id.isNotEmpty() && it.appWidgetId >= 0 &&
+                    it.providerPackage.isNotEmpty()
             }
             else -> null
         }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,12 +67,19 @@ import kotlinx.coroutines.withContext
  * - Tap an occupied cell in move mode: rejected, both shortcuts stay,
  *   message shows "Occupied — move rejected".
  *
+ * Phase 2: widgets render live in the grid. The grid is slot-based
+ * now, not one item per cell: a widget spans 2 columns (GridItemSpan)
+ * and 2 rows (aspectRatio), and cells its span covers are skipped.
+ * A widget tap does nothing here — the hosted view handles its own
+ * touches. Long-press still selects it for moving, and moving is
+ * span-aware through the store (the whole 2x2 block must be free).
+ *
  * Uses the same colors as MainActivity (Back / Panel / Cyan) so it
  * fits the existing GlassforgeApp theme.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun WorkspaceScreen(store: WorkspaceStore) {
+fun WorkspaceScreen(store: WorkspaceStore, widgetHost: WidgetHost) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val items by store.items.collectAsState()
@@ -119,9 +128,10 @@ fun WorkspaceScreen(store: WorkspaceStore) {
         }
     }
 
-    val gridCells = (0 until WorkspaceRules.ROWS).flatMap { y ->
-        (0 until WorkspaceRules.COLUMNS).map { x -> WorkspaceCell(page = 0, x = x, y = y) }
-    }
+    // Slot-based grid: one slot per cell, except a widget's anchor slot
+    // spans its block and the cells it covers are skipped (they have no
+    // slot of their own — the widget draws over them).
+    val slots = remember(items) { buildGridSlots(items) }
 
     Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
         Text(
@@ -150,14 +160,41 @@ fun WorkspaceScreen(store: WorkspaceStore) {
             columns = GridCells.Fixed(WorkspaceRules.COLUMNS),
             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
         ) {
-            items(gridCells.size) { index ->
-                val cell = gridCells[index]
-                val item = items.firstOrNull { it.cell == cell }
+            items(
+                count = slots.size,
+                key = { index ->
+                    when (val slot = slots[index]) {
+                        is GridSlot.Cell -> "cell:${slot.cell.x},${slot.cell.y}"
+                        is GridSlot.WidgetSlot -> slot.widget.id
+                    }
+                },
+                span = { index ->
+                    when (val slot = slots[index]) {
+                        is GridSlot.WidgetSlot -> GridItemSpan(slot.widget.spanX)
+                        is GridSlot.Cell -> GridItemSpan(1)
+                    }
+                },
+            ) { index ->
+                val slot = slots[index]
+                val cell = when (slot) {
+                    is GridSlot.Cell -> slot.cell
+                    is GridSlot.WidgetSlot -> slot.widget.cell
+                }
+                val item = when (slot) {
+                    is GridSlot.Cell -> items.firstOrNull { it.cell == cell }
+                    is GridSlot.WidgetSlot -> slot.widget
+                }
                 val isSelected = item?.id == selectedId
                 Box(
                     modifier = Modifier
                         .padding(4.dp)
-                        .aspectRatio(1f)
+                        .aspectRatio(
+                            if (item is WorkspaceItem.Widget) {
+                                item.spanX.toFloat() / item.spanY
+                            } else {
+                                1f
+                            }
+                        )
                         .clip(RoundedCornerShape(16.dp))
                         .background(
                             when {
@@ -184,6 +221,9 @@ fun WorkspaceScreen(store: WorkspaceStore) {
                                     item is WorkspaceItem.AppShortcut -> {
                                         val ok = store.launchApp(item.packageName)
                                         if (!ok) message = "Could not launch ${item.label}"
+                                    }
+                                    item is WorkspaceItem.Widget -> {
+                                        // The hosted view handles its own touches.
                                     }
                                     else -> { /* empty cell, nothing to do */ }
                                 }
@@ -249,6 +289,41 @@ fun WorkspaceScreen(store: WorkspaceStore) {
                                 modifier = Modifier.padding(6.dp),
                             )
                         }
+                        is WorkspaceItem.Widget -> {
+                            // Live hosted view, created once per widget (the
+                            // grid key keeps it stable across recompositions).
+                            // Null means its provider is gone (uninstalled).
+                            val hostView = remember(item) {
+                                widgetHost.createView(context, item)
+                            }
+                            if (hostView != null) {
+                                AndroidView(
+                                    factory = { hostView },
+                                    modifier = Modifier.fillMaxSize().padding(4.dp),
+                                )
+                            } else {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(6.dp),
+                                ) {
+                                    Text(
+                                        text = "⚠ ${item.label}",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = "Widget unavailable — remove it from the Widgets tab",
+                                        color = Color(0xFF9AA8BC),
+                                        fontSize = 9.sp,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(top = 4.dp),
+                                    )
+                                }
+                            }
+                        }
                         null -> {
                             // Empty cell, nothing to draw.
                         }
@@ -258,7 +333,7 @@ fun WorkspaceScreen(store: WorkspaceStore) {
         }
 
         Text(
-            text = "Long-press an app to move it. Tap to launch. Moves save before the screen updates, and survive a restart.",
+            text = "Long-press an app to move it. Tap to launch. Moves save before the screen updates, and survive a restart. Widgets live 2×2 on the grid — add them from the Widgets tab, long-press to move them, remove them there.",
             color = Color(0xFF9AA8BC),
             fontSize = 10.sp,
             modifier = Modifier.padding(top = 12.dp),
@@ -281,4 +356,33 @@ private fun drawableToBitmap(drawable: android.graphics.drawable.Drawable): Imag
     drawable.setBounds(0, 0, width, height)
     drawable.draw(canvas)
     return bitmap.asImageBitmap()
+}
+
+/**
+ * Phase 2 grid slots. The grid is row-major over page 0; a widget's
+ * anchor cell emits a WidgetSlot (spanning its block) and every other
+ * cell its span covers is skipped — it has no slot of its own.
+ */
+private sealed interface GridSlot {
+    data class Cell(val cell: WorkspaceCell) : GridSlot
+    data class WidgetSlot(val widget: WorkspaceItem.Widget) : GridSlot
+}
+
+private fun buildGridSlots(items: List<WorkspaceItem>): List<GridSlot> {
+    val covered = mutableSetOf<WorkspaceCell>()
+    val out = mutableListOf<GridSlot>()
+    for (y in 0 until WorkspaceRules.ROWS) {
+        for (x in 0 until WorkspaceRules.COLUMNS) {
+            val cell = WorkspaceCell(page = 0, x = x, y = y)
+            if (cell in covered) continue
+            val item = items.firstOrNull { it.cell == cell }
+            if (item is WorkspaceItem.Widget) {
+                out += GridSlot.WidgetSlot(item)
+                covered += WorkspaceRules.coveredCells(item)
+            } else {
+                out += GridSlot.Cell(cell)
+            }
+        }
+    }
+    return out
 }
