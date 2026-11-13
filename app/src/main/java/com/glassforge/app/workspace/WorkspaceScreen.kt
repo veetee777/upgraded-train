@@ -1,9 +1,8 @@
 package com.glassforge.app.workspace
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
@@ -33,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,6 +41,9 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.glassforge.app.element.ForgeBreathBackground
+import com.glassforge.app.feature.FrostLockManager
+import com.glassforge.app.shape.easter.ShatteredCellOverlay
 
 /**
  * Phase 1b workspace screen — GLASSFORGE v0.7
@@ -74,10 +77,22 @@ import kotlinx.coroutines.withContext
  * touches. Long-press still selects it for moving, and moving is
  * span-aware through the store (the whole 2x2 block must be free).
  *
+ * Gemini's swing (gemini-feature branch): Frost Lock (double-tap an
+ * app to freeze it — a white glaze covers the icon and single taps do
+ * nothing; double-tap again to thaw; state in SharedPreferences
+ * "glassforge_frost"), Breath of the Forge (the whole screen wrapped
+ * in ForgeBreathBackground — the background breathes with the battery),
+ * and the Shattered Cell (5 rapid taps on an empty cell crack it;
+ * long-press sweeps the glass). Two adaptations from Gemini's diff:
+ * the cell gestures are one detectTapGestures handler (combinedClickable
+ * cannot do double-tap), and the shatter state/gestures live in this
+ * screen, not in the overlay, so the overlay cannot swallow the taps
+ * that move items. Single taps wait out the double-tap window (~300ms)
+ * — launches feel slightly slower; that is the price of the freeze.
+ *
  * Uses the same colors as MainActivity (Back / Panel / Cyan) so it
  * fits the existing GlassforgeApp theme.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WorkspaceScreen(store: WorkspaceStore, widgetHost: WidgetHost) {
     val context = LocalContext.current
@@ -85,6 +100,28 @@ fun WorkspaceScreen(store: WorkspaceStore, widgetHost: WidgetHost) {
     val items by store.items.collectAsState()
     var selectedId by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf("") }
+
+    // Gemini's swing: Frost Lock + Shattered Cell state.
+    val frostManager = remember { FrostLockManager(context) }
+    val frostedApps by frostManager.frostedApps.collectAsState()
+    // Shattered cells: cell -> true once cracked. In-memory only, as
+    // in Gemini's spec (persists across swipes, not across restarts).
+    val shatteredCells = remember { mutableStateMapOf<WorkspaceCell, Boolean>() }
+    // Empty-cell tap counting: cell -> (tap count, last tap time ms).
+    // A crack needs 5 taps inside a 2-second window.
+    val shatterTaps = remember { mutableStateMapOf<WorkspaceCell, Pair<Int, Long>>() }
+
+    fun recordShatterTap(cell: WorkspaceCell) {
+        val now = System.currentTimeMillis()
+        val (count, last) = shatterTaps[cell] ?: (0 to 0L)
+        val next = if (now - last > 2000L) 1 else count + 1
+        if (next >= 5) {
+            shatteredCells[cell] = true
+            shatterTaps.remove(cell)
+        } else {
+            shatterTaps[cell] = next to now
+        }
+    }
 
     // Real app icons, cached by package name. Survives recomposition
     // and moves; only missing packages are loaded, on IO.
@@ -133,6 +170,10 @@ fun WorkspaceScreen(store: WorkspaceStore, widgetHost: WidgetHost) {
     // slot of their own — the widget draws over them).
     val slots = remember(items) { buildGridSlots(items) }
 
+    // Gemini's swing: Breath of the Forge wraps the whole screen —
+    // the background breathes with the battery (cyan when full, molten
+    // orange while charging, deep purple when low).
+    ForgeBreathBackground {
     Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
         Text(
             text = "GLASSFORGE  •  Workspace",
@@ -203,79 +244,123 @@ fun WorkspaceScreen(store: WorkspaceStore, widgetHost: WidgetHost) {
                                 else -> Color(0xFF0B111B)
                             },
                         )
-                        .combinedClickable(
-                            onClick = {
-                                when {
-                                    selectedId != null && item == null -> {
-                                        val movingId = selectedId!!
-                                        selectedId = null
-                                        scope.launch {
-                                            val ok = store.move(movingId, cell)
-                                            message = if (ok) "Moved" else "Move failed — kept old spot"
+                        // Gemini's swing: one gesture handler per cell.
+                        // detectTapGestures replaces combinedClickable so
+                        // a double-tap can freeze/thaw an app (Frost Lock).
+                        // Cost: single taps wait out the double-tap window
+                        // (~300ms) before firing — launches feel slightly
+                        // slower. That is the price of the freeze.
+                        .pointerInput(cell, item?.id, selectedId, frostedApps) {
+                            detectTapGestures(
+                                onTap = {
+                                    when {
+                                        selectedId != null && item == null -> {
+                                            val movingId = selectedId!!
+                                            selectedId = null
+                                            scope.launch {
+                                                val ok = store.move(movingId, cell)
+                                                message = if (ok) "Moved" else "Move failed — kept old spot"
+                                            }
+                                        }
+                                        selectedId != null && item != null -> {
+                                            message = "Occupied — move rejected"
+                                            selectedId = null
+                                        }
+                                        item == null -> {
+                                            // Empty cell: count taps toward a shatter.
+                                            recordShatterTap(cell)
+                                        }
+                                        item is WorkspaceItem.AppShortcut &&
+                                            frostedApps.contains(item.packageName) -> {
+                                            message = "${item.label} is frozen — double-tap to thaw"
+                                        }
+                                        item is WorkspaceItem.AppShortcut -> {
+                                            val ok = store.launchApp(item.packageName)
+                                            if (!ok) message = "Could not launch ${item.label}"
+                                        }
+                                        // Widget / Folder: nothing on tap.
+                                        else -> {}
+                                    }
+                                },
+                                onDoubleTap = {
+                                    if (item is WorkspaceItem.AppShortcut) {
+                                        val wasFrosted = frostedApps.contains(item.packageName)
+                                        frostManager.toggleFrost(item.packageName)
+                                        message = if (wasFrosted) {
+                                            "${item.label} thawed"
+                                        } else {
+                                            "${item.label} frozen"
                                         }
                                     }
-                                    selectedId != null && item != null -> {
-                                        message = "Occupied — move rejected"
-                                        selectedId = null
+                                },
+                                onLongPress = {
+                                    if (item == null && shatteredCells[cell] == true) {
+                                        // Sweep the glass.
+                                        shatteredCells.remove(cell)
+                                        shatterTaps.remove(cell)
+                                        message = "Swept the glass"
+                                    } else if (item != null) {
+                                        selectedId = item.id
+                                        message = ""
                                     }
-                                    item is WorkspaceItem.AppShortcut -> {
-                                        val ok = store.launchApp(item.packageName)
-                                        if (!ok) message = "Could not launch ${item.label}"
-                                    }
-                                    item is WorkspaceItem.Widget -> {
-                                        // The hosted view handles its own touches.
-                                    }
-                                    else -> { /* empty cell, nothing to do */ }
-                                }
-                            },
-                            onLongClick = {
-                                if (item != null) {
-                                    selectedId = item.id
-                                    message = ""
-                                }
-                            },
-                        ),
+                                },
+                            )
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     when (item) {
                         is WorkspaceItem.AppShortcut -> {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.padding(6.dp),
+                            val isFrosted = frostedApps.contains(item.packageName)
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                val icon = iconCache[item.packageName]
-                                if (icon != null) {
-                                    Image(
-                                        bitmap = icon,
-                                        contentDescription = item.label,
-                                        modifier = Modifier.size(48.dp),
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(6.dp),
+                                ) {
+                                    val icon = iconCache[item.packageName]
+                                    if (icon != null) {
+                                        Image(
+                                            bitmap = icon,
+                                            contentDescription = item.label,
+                                            modifier = Modifier.size(48.dp),
+                                        )
+                                    } else {
+                                        // Placeholder until the icon loads, or if
+                                        // the package has no icon: first letter.
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF202C3C)),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                text = item.label.take(1).uppercase(),
+                                                color = Color(0xFF79E7FF),
+                                                fontSize = 20.sp,
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = item.label,
+                                        color = if (isSelected) Color.Black else Color.White,
+                                        fontSize = 10.sp,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 4.dp),
                                     )
-                                } else {
-                                    // Placeholder until the icon loads, or if
-                                    // the package has no icon: first letter.
+                                }
+                                // Frost Lock: the glaze over a frozen app.
+                                if (isFrosted) {
                                     Box(
                                         modifier = Modifier
-                                            .size(48.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFF202C3C)),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            text = item.label.take(1).uppercase(),
-                                            color = Color(0xFF79E7FF),
-                                            fontSize = 20.sp,
-                                        )
-                                    }
+                                            .matchParentSize()
+                                            .background(Color.White.copy(alpha = 0.5f))
+                                    )
                                 }
-                                Text(
-                                    text = item.label,
-                                    color = if (isSelected) Color.Black else Color.White,
-                                    fontSize = 10.sp,
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(top = 4.dp),
-                                )
                             }
                         }
                         is WorkspaceItem.Folder -> {
@@ -325,7 +410,9 @@ fun WorkspaceScreen(store: WorkspaceStore, widgetHost: WidgetHost) {
                             }
                         }
                         null -> {
-                            // Empty cell, nothing to draw.
+                            // Shattered Cell easter egg: the crack, if this
+                            // cell was shattered by 5 rapid taps.
+                            ShatteredCellOverlay(isShattered = shatteredCells[cell] == true)
                         }
                     }
                 }
@@ -333,11 +420,12 @@ fun WorkspaceScreen(store: WorkspaceStore, widgetHost: WidgetHost) {
         }
 
         Text(
-            text = "Long-press an app to move it. Tap to launch. Moves save before the screen updates, and survive a restart. Widgets live 2×2 on the grid — add them from the Widgets tab, long-press to move them, remove them there.",
+            text = "Long-press an app to move it. Tap to launch. Moves save before the screen updates, and survive a restart. Widgets live 2×2 on the grid — add them from the Widgets tab, long-press to move them, remove them there. Double-tap an app to freeze it.",
             color = Color(0xFF9AA8BC),
             fontSize = 10.sp,
             modifier = Modifier.padding(top = 12.dp),
         )
+    }
     }
 }
 
