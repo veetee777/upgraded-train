@@ -88,15 +88,19 @@ fun WorkspaceScreen(store: WorkspaceStore) {
             .distinct()
             .filter { it !in iconCache }
         if (missing.isEmpty()) return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            for (pkg in missing) {
+        val loadedIcons = withContext(Dispatchers.IO) {
+            missing.mapNotNull { pkg ->
                 val bitmap = runCatching { pm.getApplicationIcon(pkg) }
                     .getOrNull()
                     ?.let { drawable ->
                         runCatching { drawableToBitmap(drawable) }.getOrNull()
                     }
-                if (bitmap != null) iconCache[pkg] = bitmap
+                bitmap?.let { pkg to it }
             }
+        }
+        // Publish Compose state on the main coroutine after background I/O.
+        loadedIcons.forEach { (pkg, bitmap) ->
+            iconCache[pkg] = bitmap
         }
     }
 
