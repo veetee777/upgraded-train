@@ -39,6 +39,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 import com.glassforge.app.core.LocalFileStore
+import com.glassforge.app.shape.ShapeStudioScreen
 import com.glassforge.app.workspace.WorkspaceScreen
 import com.glassforge.app.workspace.WorkspaceStore
 
@@ -96,7 +97,7 @@ fun GlassforgeApp() {
         }) { pad ->
             when (tab) {
                 0 -> WorkspaceScreen(store = workspaceStore)
-                1 -> StudioScreen(Modifier.padding(pad))
+                1 -> ShapeStudioScreen(Modifier.padding(pad))
                 2 -> NotchStudio(Modifier.padding(pad))
                 3 -> WidgetsScreen(Modifier.padding(pad))
                 else -> FontForgeScreen(Modifier.padding(pad), selectedFont) { selectedFont = it }
