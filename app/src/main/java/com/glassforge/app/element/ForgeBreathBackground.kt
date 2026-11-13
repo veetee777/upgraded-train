@@ -67,7 +67,7 @@ fun ForgeBreathBackground(modifier: Modifier = Modifier, content: @Composable ()
         initialValue = targetColor.copy(alpha = targetColor.alpha * 0.3f),
         targetValue = targetColor,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = if (isCharging) 2500 else 4500, easing = SineEasing),
+            animation = tween(durationMillis = if (isCharging) 2500 else 4500, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "BreathColor"
