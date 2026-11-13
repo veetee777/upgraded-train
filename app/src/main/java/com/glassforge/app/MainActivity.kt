@@ -608,7 +608,7 @@ private fun FontForgeScreen(modifier: Modifier = Modifier, selectedFont: String,
     }
 }
 
-private fun drawableToBitmap(drawable: android.graphics.drawable.Drawable): androidx.compose.ui.graphics.ImageBitmap {
+internal fun drawableToBitmap(drawable: android.graphics.drawable.Drawable): androidx.compose.ui.graphics.ImageBitmap {
     val width = 96
     val height = 96
     val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
